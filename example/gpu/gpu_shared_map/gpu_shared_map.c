@@ -51,6 +51,30 @@ int main()
 		if (bpf_map_lookup_elem(mapfd, &key, &value) == 0) {
 			printf("counter[0]=%lu\n", (unsigned long)value);
 		}
+		uint32_t prev_key = NULL;
+		key = NULL;
+		int err = 0;
+		int fd = bpf_map__fd(skel->maps.counter_per_thread);
+		while (1) {
+			err = bpf_map_get_next_key(fd, prev_key, &key);
+			if (err) {
+				if (errno == ENOENT) {
+					err = 0;
+					break;
+				}
+				warn("bpf_map_get_next_key failed: %s\n",
+				     strerror(errno));
+				return err;
+			}
+			err = bpf_map_lookup_elem(fd, &key, &value);
+			if (err) {
+				warn("bpf_map_lookup_elem failed: %s\n",
+				     strerror(errno));
+				return err;
+			}
+			printf("	pid=%d     calls: %d\n", key, value);
+			prev_key = &key;
+		}
 		sleep(1);
 	}
 

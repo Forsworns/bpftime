@@ -13,6 +13,7 @@
 #include "bpf_map/gpu/nv_gpu_array_map.hpp"
 #include "bpf_map/gpu/nv_gpu_shared_array_map.hpp"
 #include "bpf_map/gpu/nv_gpu_ringbuf_map.hpp"
+#include "bpf_map/gpu/nv_gpu_shared_hash_map.hpp"
 #endif
 #include "bpf_map/userspace/lpm_trie_map.hpp"
 #include <bpf_map/userspace/perf_event_array_map.hpp>
@@ -213,6 +214,11 @@ const void *bpf_map_handler::map_lookup_elem(const void *key,
 		return do_lookup(impl);
 	}
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP: {
+		auto impl = static_cast<nv_gpu_shared_hash_map_impl *>(
+			map_impl_ptr.get());
+		return do_lookup(impl);
+	}
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP: {
 		auto impl = static_cast<nv_gpu_array_map_impl *>(
 			map_impl_ptr.get());
@@ -352,6 +358,11 @@ long bpf_map_handler::map_update_elem(const void *key, const void *value,
 		return do_update(impl);
 	}
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP: {
+		auto impl = static_cast<nv_gpu_shared_hash_map_impl *>(
+			map_impl_ptr.get());
+		return do_update(impl);
+	}
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP: {
 		auto impl = static_cast<nv_gpu_array_map_impl *>(
 			map_impl_ptr.get());
@@ -480,6 +491,11 @@ int bpf_map_handler::bpf_map_get_next_key(const void *key, void *next_key,
 		return do_get_next_key(impl);
 	}
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP: {
+		auto impl = static_cast<nv_gpu_shared_hash_map_impl *>(
+			map_impl_ptr.get());
+		return do_get_next_key(impl);
+	}
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP: {
 		auto impl = static_cast<nv_gpu_array_map_impl *>(
 			map_impl_ptr.get());
@@ -623,6 +639,11 @@ long bpf_map_handler::map_delete_elem(const void *key, bool from_syscall) const
 		return do_delete(impl);
 	}
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP: {
+		auto impl = static_cast<nv_gpu_shared_hash_map_impl *>(
+			map_impl_ptr.get());
+		return do_delete(impl);
+	}
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP: {
 		auto impl = static_cast<nv_gpu_array_map_impl *>(
 			map_impl_ptr.get());
@@ -798,6 +819,29 @@ int bpf_map_handler::map_init(managed_shared_memory &memory)
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
 		static CUcontext context;
 		static CUdevice device;
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP: {
+		shm_holder.global_shared_memory.set_enable_mock(false);
+		if (!device) {
+			cuDeviceGet(&device, 0);
+#if CUDA_VERSION >= 13000
+			// CUDA 13.0+ uses 4-parameter cuCtxCreate_v4
+			cuCtxCreate(&context, nullptr, 0, device);
+#else
+			// CUDA 12.x and earlier use 3-parameter cuCtxCreate
+			cuCtxCreate(&context, 0, device);
+#endif
+			SPDLOG_INFO(
+				"CUDA context for thread {} has been set to {:x}",
+				gettid(), (uintptr_t)context);
+		}
+		SPDLOG_INFO(
+			"Map {} (nv_gpu_shared_hash_map_impl) has space for thread count {}",
+			container_name.c_str(), attr.gpu_thread_count);
+		map_impl_ptr = memory.construct<nv_gpu_shared_hash_map_impl>(
+			container_name.c_str())(memory, max_entries, key_size, value_size);
+		shm_holder.global_shared_memory.set_enable_mock(true);
+		return 0;
+	}
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP: {
 		shm_holder.global_shared_memory.set_enable_mock(false);
 		if (!device) {
@@ -953,6 +997,9 @@ void bpf_map_handler::map_free(managed_shared_memory &memory) const
 
 #endif
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	case bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP:
+		memory.destroy<nv_gpu_shared_hash_map_impl>(container_name.c_str());
+		break;
 	case bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP:
 		memory.destroy<nv_gpu_array_map_impl>(container_name.c_str());
 		break;
@@ -1002,7 +1049,7 @@ uint64_t bpf_map_handler::get_gpu_map_max_thread_count() const
 		return static_cast<nv_gpu_array_map_impl *>(map_impl_ptr.get())
 			->get_max_thread_count();
 	}
-	if (this->type == bpf_map_type::BPF_MAP_TYPE_GPU_ARRAY_MAP) {
+	if (this->type == bpf_map_type::BPF_MAP_TYPE_GPU_ARRAY_MAP || this->type == bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP) {
 		return 1;
 	}
 	if (this->type == bpf_map_type::BPF_MAP_TYPE_GPU_RINGBUF_MAP) {
@@ -1023,6 +1070,11 @@ void *bpf_map_handler::get_gpu_map_extra_buffer() const
 #endif
 
 #if defined(BPFTIME_ENABLE_CUDA_ATTACH)
+	if (this->type == bpf_map_type::BPF_MAP_TYPE_GPU_HASH_MAP) {
+		return (void *)static_cast<nv_gpu_shared_array_map_impl *>(
+			       map_impl_ptr.get())
+			->get_gpu_mem_buffer();
+	}
 	if (this->type == bpf_map_type::BPF_MAP_TYPE_PERGPUTD_ARRAY_MAP) {
 		return (void *)static_cast<nv_gpu_array_map_impl *>(
 			       map_impl_ptr.get())

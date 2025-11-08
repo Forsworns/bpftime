@@ -157,6 +157,8 @@ set(SPDLOG_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include)
 
 if(BPFTIME_ENABLE_CUDA_ATTACH)
   add_compile_definitions(BPFTIME_ENABLE_CUDA_ATTACH=1)
+  # cuCollections relies `CMAKE_CUDA_KNOWN_FEATURES`, and thus launguage support must be enabled.
+  enable_language(CUDA)
 endif()
 
 # argparse

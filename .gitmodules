@@ -19,3 +19,6 @@
 [submodule "vm/llvm-jit"]
 	path = vm/llvm-jit
 	url = https://github.com/eunomia-bpf/llvmbpf
+[submodule "third_party/cuCollections"]
+	path = third_party/cuCollections
+	url = https://github.com/NVIDIA/cuCollections.git
